@@ -96,3 +96,6 @@ experiments/**/data_files/
 experiments/**/log.txt
 experiments/**/*.png
 .previous_experiment
+
+# PyCharm
+.idea
