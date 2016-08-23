@@ -32,17 +32,15 @@ EE_POINTS = np.array([[0.02, -0.025, 0.05], [0.02, -0.025, -0.05],
                       [0.02, 0.05, 0.0]])
 
 SENSOR_DIMS = {
-    JOINT_ANGLES: 7,
-    JOINT_VELOCITIES: 7,
+    JOINT_ANGLES: 6,
+    JOINT_VELOCITIES: 6,
     END_EFFECTOR_POINTS: 3 * EE_POINTS.shape[0],
     END_EFFECTOR_POINT_VELOCITIES: 3 * EE_POINTS.shape[0],
-    ACTION: 7,
+    ACTION: 6,
 }
 
-PR2_GAINS = np.array([3.09, 1.08, 0.393, 0.674, 0.111, 0.152, 0.098])
-
 BASE_DIR = '/'.join(str.split(gps_filepath, '/')[:-2])
-EXP_DIR = BASE_DIR + '/../experiments/pr2_tensorflow_example/'
+EXP_DIR = BASE_DIR + '/../experiments/jaco_tensorflow/'
 
 common = {
     'experiment_name': 'my_experiment' + '_' + \
@@ -103,7 +101,7 @@ if not os.path.exists(common['data_files_dir']):
     os.makedirs(common['data_files_dir'])
 
 agent = {
-    'type': AgentROS,
+    'type': AgentJaco,
     'dt': 0.05,
     'conditions': common['conditions'],
     'T': 100,
@@ -111,11 +109,13 @@ agent = {
     'ee_points_tgt': ee_tgts,
     'reset_conditions': reset_conditions,
     'sensor_dims': SENSOR_DIMS,
-    'state_include': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS,
-                      END_EFFECTOR_POINT_VELOCITIES],
+    # 'state_include': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS,
+    #                   END_EFFECTOR_POINT_VELOCITIES],
+    'state_include': [JOINT_ANGLES, JOINT_VELOCITIES],
     'end_effector_points': EE_POINTS,
-    'obs_include': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS,
-                    END_EFFECTOR_POINT_VELOCITIES],
+    # 'obs_include': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS,
+    #                 END_EFFECTOR_POINT_VELOCITIES],
+    'obs_include': [JOINT_ANGLES, JOINT_VELOCITIES],
 }
 
 algorithm = {
