@@ -7,10 +7,11 @@ import os.path
 import numpy as np
 
 from gps import __file__ as gps_filepath
-from gps.agent.ros.agent_ros import AgentROS
+from gps.agent.jaco.agent_jaco import AgentJaco
 from gps.algorithm.algorithm_badmm import AlgorithmBADMM
 from gps.algorithm.cost.cost_fk import CostFK
 from gps.algorithm.cost.cost_action import CostAction
+from gps.algorithm.cost.cost_state import CostState
 from gps.algorithm.cost.cost_sum import CostSum
 from gps.algorithm.cost.cost_utils import RAMP_LINEAR, RAMP_FINAL_ONLY
 from gps.algorithm.dynamics.dynamics_lr_prior import DynamicsLRPrior
@@ -34,22 +35,25 @@ EE_POINTS = np.array([[0.02, -0.025, 0.05], [0.02, -0.025, -0.05],
 SENSOR_DIMS = {
     JOINT_ANGLES: 6,
     JOINT_VELOCITIES: 6,
+    # JOINT_TORQUES: 6,
     END_EFFECTOR_POINTS: 3 * EE_POINTS.shape[0],
     END_EFFECTOR_POINT_VELOCITIES: 3 * EE_POINTS.shape[0],
     ACTION: 6,
 }
 
+PR2_GAINS = np.array([3.09, 1.08, 0.674, 0.111, 0.152, 0.098])
+
 BASE_DIR = '/'.join(str.split(gps_filepath, '/')[:-2])
 EXP_DIR = BASE_DIR + '/../experiments/jaco_tensorflow/'
 
 common = {
-    'experiment_name': 'my_experiment' + '_' + \
+    'experiment_name': 'jaco_tensorflow' + '_' + \
             datetime.strftime(datetime.now(), '%m-%d-%y_%H-%M'),
     'experiment_dir': EXP_DIR,
     'data_files_dir': EXP_DIR + 'data_files/',
     'target_filename': EXP_DIR + 'target.npz',
     'log_filename': EXP_DIR + 'log.txt',
-    'conditions': 2,
+    'conditions': 1,
 }
 
 x0s = []
@@ -59,33 +63,38 @@ reset_conditions = []
 # Set up each condition.
 for i in xrange(common['conditions']):
 
-    ja_x0, ee_pos_x0, ee_rot_x0 = load_pose_from_npz(
-        common['target_filename'], 'trial_arm', str(i), 'initial'
-    )
-    ja_aux, _, _ = load_pose_from_npz(
-        common['target_filename'], 'auxiliary_arm', str(i), 'initial'
-    )
-    _, ee_pos_tgt, ee_rot_tgt = load_pose_from_npz(
-        common['target_filename'], 'trial_arm', str(i), 'target'
-    )
+    # Initial conditions for trial arm
+    # ja_x0, ee_pos_x0, ee_rot_x0 = load_pose_from_npz(
+    #     common['target_filename'], 'trial_arm', str(i), 'initial'
+    # )
+    # Initial conditions for aux arm
+    # ja_aux, _, _ = load_pose_from_npz(
+    #     common['target_filename'], 'auxiliary_arm', str(i), 'initial'
+    # )
+    # Target conditions for trial arm (as end effector pose)
+    # _, ee_pos_tgt, ee_rot_tgt = load_pose_from_npz(
+    #     common['target_filename'], 'trial_arm', str(i), 'target'
+    # )
 
-    x0 = np.zeros(32)
-    x0[:7] = ja_x0
-    x0[14:(14+9)] = np.ndarray.flatten(
-        get_ee_points(EE_POINTS, ee_pos_x0, ee_rot_x0).T
-    )
+    # Jaco home position at 0 velocity
+    x0 = np.zeros(12)
+    # x0[:6] = ja_x0[:6]
+    x0[:6] = [4.80, 2.91, 0.99, 4.19, 1.43, 1.31]
+    # x0[12:(12+9)] = np.ndarray.flatten(
+    #     get_ee_points(EE_POINTS, ee_pos_x0, ee_rot_x0).T
+    # )
 
-    ee_tgt = np.ndarray.flatten(
-        get_ee_points(EE_POINTS, ee_pos_tgt, ee_rot_tgt).T
-    )
+    # ee_tgt = np.ndarray.flatten(
+    #     get_ee_points(EE_POINTS, ee_pos_tgt, ee_rot_tgt).T
+    # )
 
-    aux_x0 = np.zeros(7)
-    aux_x0[:] = ja_aux
+    aux_x0 = np.zeros(6)
+    # aux_x0[:] = ja_aux[:6]
 
     reset_condition = {
         TRIAL_ARM: {
             'mode': JOINT_SPACE,
-            'data': x0[0:7],
+            'data': x0[0:6],
         },
         AUXILIARY_ARM: {
             'mode': JOINT_SPACE,
@@ -94,7 +103,7 @@ for i in xrange(common['conditions']):
     }
 
     x0s.append(x0)
-    ee_tgts.append(ee_tgt)
+    # ee_tgts.append(ee_tgt)
     reset_conditions.append(reset_condition)
 
 if not os.path.exists(common['data_files_dir']):
@@ -102,9 +111,9 @@ if not os.path.exists(common['data_files_dir']):
 
 agent = {
     'type': AgentJaco,
-    'dt': 0.05,
+    'dt': 0.01,
     'conditions': common['conditions'],
-    'T': 100,
+    'T': 500,
     'x0': x0s,
     'ee_points_tgt': ee_tgts,
     'reset_conditions': reset_conditions,
@@ -178,10 +187,26 @@ fk_cost2 = {
     'ramp_option': RAMP_FINAL_ONLY,
 }
 
+state_cost = {
+    'type': CostState,
+    'data_types' : {
+        JOINT_ANGLES: {
+            'wp': np.array([1,1,1,1,1,1]),
+            'target_state': np.array([4.5, 4.05, 1.45, 6.27, 0.61, 0.40]),
+        },
+        JOINT_VELOCITIES: {
+            'wp': np.array([1,1,1,1,1,1]),
+            'target_state': np.array([0,0,0,0,0,0]),
+        },
+    },
+}
+
 algorithm['cost'] = {
     'type': CostSum,
-    'costs': [torque_cost, fk_cost1, fk_cost2],
-    'weights': [1.0, 1.0, 1.0],
+    # 'costs': [torque_cost, fk_cost1, fk_cost2],
+    'costs': [torque_cost, state_cost],
+    # 'weights': [1.0, 1.0, 1.0],
+    'weights': [1.0, 1.0],
 }
 
 algorithm['dynamics'] = {
