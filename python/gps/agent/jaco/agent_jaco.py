@@ -10,16 +10,18 @@ from jaco_msgs.msg import ArmJointAnglesAction, ArmJointAnglesGoal
 from jaco_torque_driver_msgs.srv import SetControlMode
 import std_msgs.msg
 import sensor_msgs.msg
+import tf
 
 from gps.agent.agent import Agent
 from gps.agent.agent_utils import generate_noise, setup
-from gps.proto.gps_pb2 import JOINT_ANGLES, JOINT_VELOCITIES, ACTION
+from gps.proto.gps_pb2 import JOINT_ANGLES, JOINT_VELOCITIES, \
+    END_EFFECTOR_POINTS, END_EFFECTOR_POINT_JACOBIANS, ACTION
 from gps.sample.sample import Sample
 
 robot_command_topic = '/jaco/jaco2_controller/command'
 robot_state_topic = '/joint_states'
-joint_names = ['jaco2_joint_1', 'jaco2_joint_2', 'jaco2_joint_3',
-               'jaco2_joint_4', 'jaco2_joint_5', 'jaco2_joint_6']
+joint_names = ['jaco_joint_1', 'jaco_joint_2', 'jaco_joint_3',
+               'jaco_joint_4', 'jaco_joint_5', 'jaco_joint_6']
 
 class AgentJaco(Agent):
     """
@@ -53,6 +55,15 @@ class AgentJaco(Agent):
         self._joint_state_msg = sensor_msgs.msg.JointState()
         self._joint_state_fresh = False
 
+        # Subscribe to end effector point jacobians
+        self._ee_jacobian_sub = rospy.Subscriber(
+                "/jaco/ee_jacobian", std_msgs.msg.Float64MultiArray, self.ee_jacobian_callback)
+        self._ee_jacobian_lock = Lock()
+        self._ee_jacobian_msg = std_msgs.msg.Float64MultiArray()
+
+        # Setup out Transform Listener
+        self._tf_listener = tf.TransformListener()
+
 
     def sample(self, policy, condition, verbose=True, save=True, noisy=True):
         """
@@ -81,6 +92,18 @@ class AgentJaco(Agent):
         #x = {JOINT_ANGLES: [0, 0, 0, 0, 0, 0], JOINT_VELOCITIES: [0, 0, 0, 0, 0, 0]}
         self._joint_state_lock.release()
 
+        # Get the positions of our end effector points
+        (ee_pt1, _) = self._tf_listener.lookupTransform("/jaco_link_base", "/jaco_ee_point_1", rospy.Time())
+        (ee_pt2, _) = self._tf_listener.lookupTransform("/jaco_link_base", "/jaco_ee_point_2", rospy.Time())
+        (ee_pt3, _) = self._tf_listener.lookupTransform("/jaco_link_base", "/jaco_ee_point_3", rospy.Time())
+        x[END_EFFECTOR_POINTS] = ee_pt1 + ee_pt2 + ee_pt3
+
+        # Get the jacobians for the end effector points
+        self._ee_jacobian_lock.acquire()
+        x[END_EFFECTOR_POINT_JACOBIANS] = np.reshape(
+            self._ee_jacobian_msg.data,
+            [self._ee_jacobian_msg.layout.dim[0].size, self._ee_jacobian_msg.layout.dim[1].size])
+        self._ee_jacobian_lock.release()
 
         #sample = self._init_sample(x)
 
@@ -103,7 +126,9 @@ class AgentJaco(Agent):
         sample = self._init_sample(x)
 
         if noisy:
-            noise = generate_noise(self.T, self.dU, self._hyperparams)
+            noise = np.multiply(
+                generate_noise(self.T, self.dU, self._hyperparams),
+                0.5)
         else:
             noise = np.zeros((self.T, self.dU))
         # noise = np.zeros(6)
@@ -131,12 +156,31 @@ class AgentJaco(Agent):
                 x = self.joint_state_msg_to_state(self._joint_state_msg)
                 self._joint_state_lock.release()
 
+                # Get the positions of our end effector points
+                (ee_pt1, _) = self._tf_listener.lookupTransform("/jaco_link_base", "/jaco_ee_point_1", rospy.Time())
+                (ee_pt2, _) = self._tf_listener.lookupTransform("/jaco_link_base", "/jaco_ee_point_2", rospy.Time())
+                (ee_pt3, _) = self._tf_listener.lookupTransform("/jaco_link_base", "/jaco_ee_point_3", rospy.Time())
+                x[END_EFFECTOR_POINTS] = ee_pt1 + ee_pt2 + ee_pt3
+                print ("ee_pos: ", x[END_EFFECTOR_POINTS])
+
+                obs = x
+
+                # Get the jacobians for the end effector points
+                m = {}
+                self._ee_jacobian_lock.acquire()
+                m[END_EFFECTOR_POINT_JACOBIANS] = np.reshape(
+                        self._ee_jacobian_msg.data,
+                        [self._ee_jacobian_msg.layout.dim[0].size, self._ee_jacobian_msg.layout.dim[1].size])
+                self._ee_jacobian_lock.release()
+
                 # Calculate and send new command
-                u = policy.act(self.vectorize_x(x), self.vectorize_x(x), t, noise[t, :])
+                u = policy.act(self.vectorize_x(x), self.vectorize_x(obs), t, noise[t, :])
+                u = np.multiply(u, 0.3)
                 self._send_command(u)
 
                 # Save this sample
                 self.set_sample(sample, x, t)
+                self.set_sample(sample, m, t)
                 sample.set(ACTION, np.array(u), t)
                 t += 1
             else:
@@ -159,6 +203,11 @@ class AgentJaco(Agent):
         self._joint_state_msg = message
         self._joint_state_fresh = True
         self._joint_state_lock.release()
+
+    def ee_jacobian_callback(self, message):
+        self._ee_jacobian_lock.acquire()
+        self._ee_jacobian_msg = message
+        self._ee_jacobian_lock.release()
 
     def _send_command(self, U):
         """

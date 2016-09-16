@@ -22,7 +22,8 @@ from gps.algorithm.policy.lin_gauss_init import init_lqr
 from gps.algorithm.policy.policy_prior_gmm import PolicyPriorGMM
 from gps.gui.target_setup_gui import load_pose_from_npz
 from gps.proto.gps_pb2 import JOINT_ANGLES, JOINT_VELOCITIES, \
-        END_EFFECTOR_POINTS, END_EFFECTOR_POINT_VELOCITIES, ACTION, \
+        END_EFFECTOR_POINTS, END_EFFECTOR_POINT_VELOCITIES, \
+        END_EFFECTOR_POINT_JACOBIANS, ACTION, \
         TRIAL_ARM, AUXILIARY_ARM, JOINT_SPACE
 from gps.utility.general_utils import get_ee_points
 from gps.gui.config import generate_experiment_info
@@ -32,12 +33,19 @@ from gps.algorithm.policy_opt.tf_model_example import example_tf_network
 EE_POINTS = np.array([[0.02, -0.025, 0.05], [0.02, -0.025, -0.05],
                       [0.02, 0.05, 0.0]])
 
+#EE_POINT_TARGET = np.array([0, 0.4, 0.1, 0.1, 0.4, 0.1, 0, 0.5, 0.1])
+#EE_POINT_TARGET = np.array([0.286, -0.043, 0.414, 0.349, 0.028, 0.383, 0.292,
+#  -0.089, 0.325])
+#EE_POINT_TARGET = np.array([-0.091, -0.500, 0.098, -0.191, -0.495, 0.102, -0.096, -0.599, 0.101])
+EE_POINT_TARGET = np.array([-0.020, -0.534, 0.102, -0.112, -0.574, 0.111, 0.020, -0.626, 0.106])
+
 SENSOR_DIMS = {
     JOINT_ANGLES: 6,
     JOINT_VELOCITIES: 6,
     # JOINT_TORQUES: 6,
     END_EFFECTOR_POINTS: 3 * EE_POINTS.shape[0],
     END_EFFECTOR_POINT_VELOCITIES: 3 * EE_POINTS.shape[0],
+    END_EFFECTOR_POINT_JACOBIANS: 3 * EE_POINTS.shape[0] * 6,
     ACTION: 6,
 }
 
@@ -77,9 +85,10 @@ for i in xrange(common['conditions']):
     # )
 
     # Jaco home position at 0 velocity
-    x0 = np.zeros(12)
+    x0 = np.zeros(12 + 9)
     # x0[:6] = ja_x0[:6]
-    x0[:6] = [4.80, 2.91, 0.99, 4.19, 1.43, 1.31]
+    x0[:6] = [4.80, 2.91, 0.99, 4.19, 1.43, 1.31] # home position
+    # x0[:6] = [4.0453, 5.176, 0.0456, -2.876, 8.169, -1.386] #gripper down
     # x0[12:(12+9)] = np.ndarray.flatten(
     #     get_ee_points(EE_POINTS, ee_pos_x0, ee_rot_x0).T
     # )
@@ -120,11 +129,12 @@ agent = {
     'sensor_dims': SENSOR_DIMS,
     # 'state_include': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS,
     #                   END_EFFECTOR_POINT_VELOCITIES],
-    'state_include': [JOINT_ANGLES, JOINT_VELOCITIES],
+    'state_include': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS],
     'end_effector_points': EE_POINTS,
     # 'obs_include': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS,
     #                 END_EFFECTOR_POINT_VELOCITIES],
-    'obs_include': [JOINT_ANGLES, JOINT_VELOCITIES],
+    'obs_include': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS],
+    'meta_include': [END_EFFECTOR_POINT_JACOBIANS],
 }
 
 algorithm = {
@@ -170,7 +180,8 @@ fk_cost1 = {
     'type': CostFK,
     # Target end effector is subtracted out of EE_POINTS in ROS so goal
     # is 0.
-    'target_end_effector': np.zeros(3 * EE_POINTS.shape[0]),
+    # 'target_end_effector': np.zeros(3 * EE_POINTS.shape[0]),
+    'target_end_effector': EE_POINT_TARGET,
     'wp': np.ones(SENSOR_DIMS[END_EFFECTOR_POINTS]),
     'l1': 0.1,
     'l2': 0.0001,
@@ -179,7 +190,8 @@ fk_cost1 = {
 
 fk_cost2 = {
     'type': CostFK,
-    'target_end_effector': np.zeros(3 * EE_POINTS.shape[0]),
+    # 'target_end_effector': np.zeros(3 * EE_POINTS.shape[0]),
+    'target_end_effector': EE_POINT_TARGET,
     'wp': np.ones(SENSOR_DIMS[END_EFFECTOR_POINTS]),
     'l1': 1.0,
     'l2': 0.0,
@@ -192,10 +204,11 @@ state_cost = {
     'data_types' : {
         JOINT_ANGLES: {
             'wp': np.array([1,1,1,1,1,1]),
-            'target_state': np.array([4.5, 4.05, 1.45, 6.27, 0.61, 0.40]),
+            'target_state': np.array([4.61, 3.63, 1.97, 5.74, 1.72, -0.49])
+            # 'target_state': np.array([4.5, 4.05, 1.45, 6.27, 0.61, 0.40]),
         },
         JOINT_VELOCITIES: {
-            'wp': np.array([1,1,1,1,1,1]),
+            'wp': np.array([2,2,2,2,2,2]),
             'target_state': np.array([0,0,0,0,0,0]),
         },
     },
@@ -203,10 +216,10 @@ state_cost = {
 
 algorithm['cost'] = {
     'type': CostSum,
-    # 'costs': [torque_cost, fk_cost1, fk_cost2],
-    'costs': [torque_cost, state_cost],
-    # 'weights': [1.0, 1.0, 1.0],
-    'weights': [1.0, 1.0],
+    'costs': [torque_cost, fk_cost1, fk_cost2],
+    # 'costs': [torque_cost, state_cost],
+    'weights': [1.0, 1.0, 1.0],
+    # 'weights': [1.0, 1.0],
 }
 
 algorithm['dynamics'] = {
@@ -227,8 +240,8 @@ algorithm['traj_opt'] = {
 algorithm['policy_opt'] = {
     'type': PolicyOptTf,
     'network_params': {
-        'obs_include': [JOINT_ANGLES, JOINT_VELOCITIES],
-        'obs_vector_data': [JOINT_ANGLES, JOINT_VELOCITIES],
+        'obs_include': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS],
+        'obs_vector_data': [JOINT_ANGLES, JOINT_VELOCITIES, END_EFFECTOR_POINTS],
         'sensor_dims': SENSOR_DIMS,
     },
     'network_model': example_tf_network,
